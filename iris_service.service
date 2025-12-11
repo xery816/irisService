@@ -1,0 +1,21 @@
+[Unit]
+Description=Iris Recognition Service
+Documentation=https://github.com/your-repo/iris-service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/iris_service
+ExecStart=/opt/iris_service/iris_service --host 0.0.0.0 --port 5000 --camera 0
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# 环境变量（可选）
+# Environment="DISPLAY=:0"
+
+[Install]
+WantedBy=multi-user.target
+
