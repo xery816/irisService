@@ -268,6 +268,35 @@ def stop_camera_api():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/camera/set-index', methods=['POST'])
+def set_camera_index():
+    """设置摄像头索引
+    
+    请求参数:
+        camera_index: int - 摄像头索引 (必填)
+    """
+    data = request.json or {}
+    camera_index = data.get('camera_index')
+    
+    # 参数校验
+    if camera_index is None:
+        return jsonify({'success': False, 'error': '缺少 camera_index 参数'})
+    
+    if not isinstance(camera_index, int) or camera_index < 0:
+        return jsonify({'success': False, 'error': 'camera_index 必须是非负整数'})
+    
+    # 设置新索引
+    old_index = iris_service.camera_index
+    iris_service.camera_index = camera_index
+    print(f"[设置索引] 摄像头索引: {old_index} -> {camera_index}")
+    
+    return jsonify({
+        'success': True,
+        'message': f'摄像头索引已设置为 {camera_index}',
+        'camera_index': camera_index
+    })
+
+
 @app.route('/api/video/stream')
 def video_stream():
     """MJPEG 视频流 - 异步启动摄像头"""
@@ -394,6 +423,7 @@ if __name__ == '__main__':
     print(f"  - 状态查询: http://{args.host}:{args.port}/api/status")
     print(f"  - 启动摄像头: POST http://{args.host}:{args.port}/api/camera/start")
     print(f"  - 停止摄像头: POST http://{args.host}:{args.port}/api/camera/stop")
+    print(f"  - 设置摄像头索引: POST http://{args.host}:{args.port}/api/camera/set-index")
     print(f"  - 视频流: http://{args.host}:{args.port}/api/video/stream")
     print("")
     print("提示: 摄像头需要手动启动后才能使用")
