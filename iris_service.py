@@ -235,10 +235,9 @@ iris_service = IrisService()
 def get_status():
     """获取服务状态"""
     return jsonify({
-        'running': iris_service.is_running,
-        'camera_index': iris_service.camera_index,
-        'iris_detected': iris_service.is_iris_detected,
-        'detection': iris_service.detection_result
+        'service_running': True,
+        'camera_running': iris_service.is_running,
+        'camera_index': iris_service.camera_index
     })
 
 
