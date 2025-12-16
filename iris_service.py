@@ -37,10 +37,10 @@ class IrisService:
         if self.cap is None or not self.cap.isOpened():
             self.cap = cv2.VideoCapture(self.camera_index)
             step1_time = time.time() - step_start
-            print(f"      ⏱️  耗时: {step1_time:.3f}秒")
+            print(f"耗时: {step1_time:.3f}秒")
             
             if not self.cap.isOpened():
-                print(f"❌ 摄像头 {self.camera_index} 打开失败！")
+                print(f"摄像头 {self.camera_index} 打开失败！")
                 return False
             
             # 不设置分辨率，使用默认值，避免5秒延迟
@@ -49,23 +49,23 @@ class IrisService:
             step_start = time.time()
             ret, test_frame = self.cap.read()
             step2_time = time.time() - step_start
-            print(f"      ⏱️  耗时: {step2_time:.3f}秒")
+            print(f"耗时: {step2_time:.3f}秒")
             
             if ret:
-                print(f"✅ 第一帧读取成功，默认分辨率: {test_frame.shape}")
+                print(f"第一帧读取成功，默认分辨率: {test_frame.shape}")
             else:
-                print(f"⚠️  第一帧读取失败")
+                print(f"第一帧读取失败")
         
         print(f"[3/3] 启动采集线程...")
         step_start = time.time()
         self.is_running = True
         threading.Thread(target=self._capture_loop, daemon=True).start()
         step3_time = time.time() - step_start
-        print(f"      ⏱️  耗时: {step3_time:.3f}秒")
+        print(f"耗时: {step3_time:.3f}秒")
         
         total_time = time.time() - total_start
-        print(f"✅ 摄像头 {self.camera_index} 启动完成")
-        print(f"📊 总耗时: {total_time:.3f}秒")
+        print(f"摄像头 {self.camera_index} 启动完成")
+        print(f"总耗时: {total_time:.3f}秒")
         return True
 
     def stop_camera(self):
@@ -87,9 +87,9 @@ class IrisService:
                 if ret:
                     frame_count += 1
                     if frame_count == 1:
-                        print(f"📹 采集线程：已采集第一帧")
+                        print(f"采集线程：已采集第一帧")
                     elif frame_count % 30 == 0:
-                        print(f"📹 采集线程：已采集 {frame_count} 帧")
+                        print(f"采集线程：已采集 {frame_count} 帧")
                     
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     with self.lock:
@@ -99,16 +99,16 @@ class IrisService:
                 else:
                     error_count += 1
                     if error_count == 1:
-                        print(f"⚠️  采集线程：读取帧失败")
+                        print(f"采集线程：读取帧失败")
                     if error_count >= 10:
-                        print(f"❌ 采集线程：连续失败 {error_count} 次，可能摄像头异常")
+                        print(f"采集线程：连续失败 {error_count} 次，可能摄像头异常")
             else:
-                print(f"❌ 采集线程：摄像头未打开或已关闭")
+                print(f"采集线程：摄像头未打开或已关闭")
                 break
             
             time.sleep(0.03)  # ~30fps
         
-        print(f"📹 采集线程已停止，共采集 {frame_count} 帧")
+        print(f"采集线程已停止，共采集 {frame_count} 帧")
 
     def _detect_iris(self, frame):
         """虹膜检测"""
