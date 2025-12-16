@@ -269,79 +269,96 @@ def list_cameras():
     cameras = []
     debug_info = []  # 调试信息
 
-    # 1. 获取所有 /dev/video* 设备路径
+    # 1. 获取所有 /dev/video* 设备路径（使用 glob，更可靠）
+    import glob
     device_paths = {}
     try:
-        for device in os.listdir('/dev'):
-            if device.startswith('video') and device[5:].isdigit():
-                idx = int(device.replace('video', ''))
-                device_paths[idx] = f'/dev/{device}'
+        video_devices = glob.glob('/dev/video*')
+        for device_path in video_devices:
+            # 从路径中提取索引号，例如 /dev/video0 -> 0
+            device_name = device_path.split('/')[-1]  # video0
+            if device_name[5:].isdigit():  # 确保 video 后面是数字
+                idx = int(device_name.replace('video', ''))
+                device_paths[idx] = device_path
     except Exception as e:
-        print(f"[摄像头列表] 读取 /dev 目录失败: {e}")
+        print(f"[摄像头列表] 读取 /dev/video* 设备失败: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
     print(f"[摄像头列表] 发现 {len(device_paths)} 个设备节点: {list(device_paths.values())}")
 
-    # 2. 使用 OpenCV 测试哪些索引可用
-    for idx in sorted(device_paths.keys()):
-        device_path = device_paths[idx]
-        debug_entry = {
-            'index': idx,
-            'device': device_path,
-            'opencv_opened': False,
-            'error': None,
-            'device_caps': None
-        }
+    # 临时抑制 OpenCV 警告日志
+    import os
+    original_log_level = os.environ.get('OPENCV_LOG_LEVEL')
+    os.environ['OPENCV_LOG_LEVEL'] = 'FATAL'  # 只显示致命错误
 
-        try:
-            # 先检查设备能力
+    try:
+        # 2. 使用 OpenCV 测试哪些索引可用
+        for idx in sorted(device_paths.keys()):
+            device_path = device_paths[idx]
+            debug_entry = {
+                'index': idx,
+                'device': device_path,
+                'opencv_opened': False,
+                'error': None,
+                'device_caps': None
+            }
+
             try:
-                import subprocess
-                result = subprocess.run(
-                    ['v4l2-ctl', '--device', device_path, '--all'],
-                    capture_output=True,
-                    text=True,
-                    timeout=1
-                )
+                # 先检查设备能力
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ['v4l2-ctl', '--device', device_path, '--all'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
 
-                if result.returncode == 0:
-                    # 提取设备能力
-                    for line in result.stdout.split('\n'):
-                        if 'Device Caps' in line:
-                            debug_entry['device_caps'] = line.strip()
-                        if 'Card type' in line:
-                            debug_entry['card_type'] = line.split(':', 1)[1].strip()
+                    if result.returncode == 0:
+                        # 提取设备能力
+                        for line in result.stdout.split('\n'):
+                            if 'Device Caps' in line:
+                                debug_entry['device_caps'] = line.strip()
+                            if 'Card type' in line:
+                                debug_entry['card_type'] = line.split(':', 1)[1].strip()
+                except Exception as e:
+                    debug_entry['v4l2_error'] = str(e)
+
+                # 尝试用 OpenCV 打开
+                cap = cv2.VideoCapture(idx)
+
+                if cap.isOpened():
+                    debug_entry['opencv_opened'] = True
+
+                    # 获取 OpenCV 能提供的信息
+                    camera_info = {
+                        'index': idx,
+                        'device': device_path,
+                        'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                        'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                        'fps': cap.get(cv2.CAP_PROP_FPS),
+                        'name': debug_entry.get('card_type', f'Camera {idx}')
+                    }
+
+                    cameras.append(camera_info)
+                    cap.release()
+                    print(f"[摄像头列表] ✓ {device_path} 可用: {camera_info['name']}")
+                else:
+                    debug_entry['error'] = 'OpenCV failed to open (可能是元数据设备)'
+                    print(f"[摄像头列表] ✗ {device_path} 无法打开 (可能是元数据设备)")
+
             except Exception as e:
-                debug_entry['v4l2_error'] = str(e)
+                debug_entry['error'] = str(e)
+                print(f"[摄像头列表] ✗ {device_path} 异常: {e}")
 
-            # 尝试用 OpenCV 打开
-            cap = cv2.VideoCapture(idx)
+            debug_info.append(debug_entry)
 
-            if cap.isOpened():
-                debug_entry['opencv_opened'] = True
-
-                # 获取 OpenCV 能提供的信息
-                camera_info = {
-                    'index': idx,
-                    'device': device_path,
-                    'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                    'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                    'fps': cap.get(cv2.CAP_PROP_FPS),
-                    'name': debug_entry.get('card_type', f'Camera {idx}')
-                }
-
-                cameras.append(camera_info)
-                cap.release()
-                print(f"[摄像头列表] ✓ {device_path} 可用: {camera_info['name']}")
-            else:
-                debug_entry['error'] = 'OpenCV failed to open'
-                print(f"[摄像头列表] ✗ {device_path} 无法打开")
-
-        except Exception as e:
-            debug_entry['error'] = str(e)
-            print(f"[摄像头列表] ✗ {device_path} 异常: {e}")
-
-        debug_info.append(debug_entry)
+    finally:
+        # 恢复原始日志级别
+        if original_log_level is not None:
+            os.environ['OPENCV_LOG_LEVEL'] = original_log_level
+        else:
+            os.environ.pop('OPENCV_LOG_LEVEL', None)
 
     return jsonify({
         'success': True,
