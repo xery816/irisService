@@ -263,12 +263,161 @@ def get_status():
     })
 
 
+@app.route('/api/camera/list', methods=['GET'])
+def list_cameras():
+    """列出所有可用摄像头"""
+    cameras = []
+    debug_info = []  # 调试信息
+
+    # 1. 获取所有 /dev/video* 设备路径
+    device_paths = {}
+    try:
+        for device in os.listdir('/dev'):
+            if device.startswith('video') and device[5:].isdigit():
+                idx = int(device.replace('video', ''))
+                device_paths[idx] = f'/dev/{device}'
+    except Exception as e:
+        print(f"[摄像头列表] 读取 /dev 目录失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+    print(f"[摄像头列表] 发现 {len(device_paths)} 个设备节点: {list(device_paths.values())}")
+
+    # 2. 使用 OpenCV 测试哪些索引可用
+    for idx in sorted(device_paths.keys()):
+        device_path = device_paths[idx]
+        debug_entry = {
+            'index': idx,
+            'device': device_path,
+            'opencv_opened': False,
+            'error': None,
+            'device_caps': None
+        }
+
+        try:
+            # 先检查设备能力
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['v4l2-ctl', '--device', device_path, '--all'],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+
+                if result.returncode == 0:
+                    # 提取设备能力
+                    for line in result.stdout.split('\n'):
+                        if 'Device Caps' in line:
+                            debug_entry['device_caps'] = line.strip()
+                        if 'Card type' in line:
+                            debug_entry['card_type'] = line.split(':', 1)[1].strip()
+            except Exception as e:
+                debug_entry['v4l2_error'] = str(e)
+
+            # 尝试用 OpenCV 打开
+            cap = cv2.VideoCapture(idx)
+
+            if cap.isOpened():
+                debug_entry['opencv_opened'] = True
+
+                # 获取 OpenCV 能提供的信息
+                camera_info = {
+                    'index': idx,
+                    'device': device_path,
+                    'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                    'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                    'fps': cap.get(cv2.CAP_PROP_FPS),
+                    'name': debug_entry.get('card_type', f'Camera {idx}')
+                }
+
+                cameras.append(camera_info)
+                cap.release()
+                print(f"[摄像头列表] ✓ {device_path} 可用: {camera_info['name']}")
+            else:
+                debug_entry['error'] = 'OpenCV failed to open'
+                print(f"[摄像头列表] ✗ {device_path} 无法打开")
+
+        except Exception as e:
+            debug_entry['error'] = str(e)
+            print(f"[摄像头列表] ✗ {device_path} 异常: {e}")
+
+        debug_info.append(debug_entry)
+
+    return jsonify({
+        'success': True,
+        'cameras': cameras,
+        'debug': debug_info  # 返回调试信息
+    })
+
+
+@app.route('/api/camera/set-device', methods=['POST'])
+def set_camera_device():
+    """设置摄像头设备（支持 /dev/videoX 或索引号）"""
+    data = request.json or {}
+    device = data.get('device')
+
+    if not device:
+        return jsonify({'success': False, 'error': '缺少 device 参数'})
+
+    # 解析设备路径或索引
+    if isinstance(device, str) and device.startswith('/dev/video'):
+        # 如果是设备路径，提取索引号
+        try:
+            index = int(device.replace('/dev/video', ''))
+        except ValueError:
+            return jsonify({'success': False, 'error': f'无效的设备路径: {device}'})
+    elif isinstance(device, (int, str)):
+        # 如果是索引号
+        try:
+            index = int(device)
+        except ValueError:
+            return jsonify({'success': False, 'error': 'device 必须是数字或 /dev/videoX 格式'})
+    else:
+        return jsonify({'success': False, 'error': 'device 格式错误'})
+
+    if index < 0:
+        return jsonify({'success': False, 'error': '索引必须大于等于0'})
+
+    # 验证设备是否存在
+    device_path = f'/dev/video{index}'
+    if not os.path.exists(device_path):
+        return jsonify({'success': False, 'error': f'设备 {device_path} 不存在'})
+
+    # 如果摄像头正在运行，先停止再切换
+    was_running = iris_service.is_running
+    if was_running:
+        print(f"[设置设备] 停止当前摄像头 (索引 {iris_service.camera_index})")
+        iris_service.stop_camera()
+
+    # 设置新索引
+    iris_service.camera_index = index
+    print(f"[设置设备] 摄像头已设置为 {device_path} (索引 {index})")
+
+    # 如果之前在运行，重新启动
+    if was_running:
+        print(f"[设置设备] 重新启动摄像头 {device_path}")
+        iris_service.start_camera()
+        return jsonify({
+            'success': True,
+            'message': f'摄像头已设置为 {device_path} 并重新启动',
+            'device': device_path,
+            'index': index
+        })
+
+    return jsonify({
+        'success': True,
+        'message': f'摄像头已设置为 {device_path}',
+        'device': device_path,
+        'index': index
+    })
+
+
 @app.route('/api/camera/start', methods=['POST'])
 def start_camera():
     """启动摄像头"""
     if iris_service.is_running:
         return jsonify({'success': False, 'error': '摄像头已在运行'})
-    
+
     try:
         iris_service.start_camera()
         return jsonify({'success': True, 'message': '摄像头已启动'})
