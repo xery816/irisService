@@ -17,8 +17,8 @@ CORS(app, origins="*")
 
 
 class IrisService:
-    def __init__(self, camera_index=0):
-        self.camera_index = camera_index
+    def __init__(self):
+        self.camera_index = 0  # 固定使用索引 0
         self.cap = None
         self.is_running = False
         self.current_frame = None
@@ -237,7 +237,7 @@ def get_status():
     return jsonify({
         'service_running': True,
         'camera_running': iris_service.is_running,
-        'camera_index': iris_service.camera_index
+        'camera_index': 0  # 固定返回 0
     })
 
 
@@ -265,35 +265,6 @@ def stop_camera_api():
         return jsonify({'success': True, 'message': '摄像头已停止'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-
-@app.route('/api/camera/set-index', methods=['POST'])
-def set_camera_index():
-    """设置摄像头索引
-    
-    请求参数:
-        camera_index: int - 摄像头索引 (必填)
-    """
-    data = request.json or {}
-    camera_index = data.get('camera_index')
-    
-    # 参数校验
-    if camera_index is None:
-        return jsonify({'success': False, 'error': '缺少 camera_index 参数'})
-    
-    if not isinstance(camera_index, int) or camera_index < 0:
-        return jsonify({'success': False, 'error': 'camera_index 必须是非负整数'})
-    
-    # 设置新索引
-    old_index = iris_service.camera_index
-    iris_service.camera_index = camera_index
-    print(f"[设置索引] 摄像头索引: {old_index} -> {camera_index}")
-    
-    return jsonify({
-        'success': True,
-        'message': f'摄像头索引已设置为 {camera_index}',
-        'camera_index': camera_index
-    })
 
 
 @app.route('/api/video/stream')
@@ -406,23 +377,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='虹膜识别服务')
     parser.add_argument('--host', default='0.0.0.0', help='监听地址 (默认: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=5000, help='监听端口 (默认: 5000)')
-    parser.add_argument('--camera', type=int, default=0, help='摄像头索引 (默认: 0)')
     args = parser.parse_args()
 
-    iris_service.camera_index = args.camera
-    # 不自动启动摄像头，改为通过API手动控制
-    # iris_service.start_camera()
-
+    # 摄像头索引固定为 0
     print("=" * 50)
     print(f"虹膜识别服务启动")
     print(f"地址: http://{args.host}:{args.port}")
-    print(f"摄像头索引: {args.camera} (未启动)")
+    print(f"摄像头索引: 0 (未启动)")
     print("")
     print("API 端点:")
     print(f"  - 状态查询: http://{args.host}:{args.port}/api/status")
     print(f"  - 启动摄像头: POST http://{args.host}:{args.port}/api/camera/start")
     print(f"  - 停止摄像头: POST http://{args.host}:{args.port}/api/camera/stop")
-    print(f"  - 设置摄像头索引: POST http://{args.host}:{args.port}/api/camera/set-index")
     print(f"  - 视频流: http://{args.host}:{args.port}/api/video/stream")
     print("")
     print("提示: 摄像头需要手动启动后才能使用")
