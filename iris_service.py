@@ -10,6 +10,7 @@ import cv2
 import threading
 import time
 import os
+import shutil
 import numpy as np
 
 app = Flask(__name__)
@@ -158,6 +159,20 @@ class IrisService:
 
         # 创建用户目录
         user_dir = os.path.join('photo', user_id, eye)
+
+        # 🆕 如果是该用户该眼别的第一张照片（idx=1），清空旧数据
+        if os.path.exists(user_dir):
+            existing = [f for f in os.listdir(user_dir) if f.endswith('.jpeg')]
+            if len(existing) == 0:
+                # 目录存在但为空，说明是新的采集
+                pass
+            elif len(existing) > 0:
+                # 检查是否是第一次采集本次注册（通过检查索引判断）
+                # 如果目录下已有3张照片，说明上次注册完成了，这次是重新注册
+                if len(existing) >= 3:
+                    print(f"[清理旧数据] 删除 {user_id}/{eye} 的旧照片：{len(existing)} 张")
+                    shutil.rmtree(user_dir)
+
         os.makedirs(user_dir, exist_ok=True)
 
         # 计算当前索引
@@ -184,6 +199,13 @@ class IrisService:
     def generate_features(self, user_id=None):
         """生成特征数据集"""
         try:
+            # 🆕 如果指定了 user_id，先删除该用户的旧特征
+            if user_id:
+                feature_user_dir = os.path.join('feature', user_id)
+                if os.path.exists(feature_user_dir):
+                    print(f"[清理旧特征] 删除 {user_id} 的旧特征数据")
+                    shutil.rmtree(feature_user_dir)
+
             from util.feature import generateFeatureDataset
             print("开始生成特征数据集...")
             generateFeatureDataset()
