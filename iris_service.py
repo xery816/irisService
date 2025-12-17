@@ -4,7 +4,7 @@
 启动命令: python iris_service.py --host 0.0.0.0 --port 5000 --camera 0
 """
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 import cv2
 import threading
@@ -12,6 +12,8 @@ import time
 import os
 import shutil
 import numpy as np
+import zipfile
+import requests
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -556,6 +558,354 @@ def recognize_iris():
         iris_service.stop_camera()
     
     return jsonify(result)
+
+
+# ==================== 数据同步 API ====================
+
+@app.route('/api/sync/bidirectional', methods=['POST'])
+def sync_bidirectional():
+    """
+    双向同步接口
+    接收两个客户端的地址，自动完成双向数据同步
+
+    请求参数：
+    {
+        "clientA": "192.168.2.59:5000",
+        "clientB": "8.155.146.165:5000"
+    }
+    """
+    try:
+        data = request.json or {}
+        client_a = data.get('clientA', '')
+        client_b = data.get('clientB', '')
+
+        if not client_a or not client_b:
+            return jsonify({
+                'success': False,
+                'error': '缺少客户端地址参数'
+            })
+
+        print(f"[双向同步] 开始同步: {client_a} <-> {client_b}")
+
+        # 判断当前服务是哪个客户端
+        current_host = request.host  # 例如：192.168.2.59:5000
+
+        if current_host == client_a:
+            # 当前是客户端A
+            peer_url = f'http://{client_b}'
+            print(f"[双向同步] 当前是客户端A，对方是客户端B: {peer_url}")
+        elif current_host == client_b:
+            # 当前是客户端B
+            peer_url = f'http://{client_a}'
+            print(f"[双向同步] 当前是客户端B，对方是客户端A: {peer_url}")
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'当前服务地址 {current_host} 不在同步列表中'
+            })
+
+        # 执行双向同步
+        result = perform_bidirectional_sync(peer_url)
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[双向同步] 失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
+@app.route('/api/sync/download', methods=['POST'])
+def sync_download():
+    """
+    接收对方客户端推送的虹膜数据
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': '未找到上传文件'})
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': '文件名为空'})
+
+        print(f"[同步下载] 接收文件: {file.filename}")
+
+        # 保存到临时目录
+        zip_path = '/tmp/iris_data_received.zip'
+        file.save(zip_path)
+
+        file_size = os.path.getsize(zip_path) / 1024 / 1024
+        print(f"[同步下载] 文件大小: {file_size:.2f} MB")
+
+        # 备份当前数据
+        backup_dir = f'/tmp/iris_backup_{int(time.time())}'
+        os.makedirs(backup_dir, exist_ok=True)
+
+        if os.path.exists('photo'):
+            shutil.copytree('photo', os.path.join(backup_dir, 'photo'))
+        if os.path.exists('feature'):
+            shutil.copytree('feature', os.path.join(backup_dir, 'feature'))
+
+        print(f"[同步下载] 已备份到: {backup_dir}")
+
+        # 解压覆盖
+        with zipfile.ZipFile(zip_path, 'r') as zipf:
+            zipf.extractall('.')
+
+        print("[同步下载] 解压完成")
+
+        # 清理临时文件
+        os.remove(zip_path)
+
+        # 清理旧备份（保留最近3个）
+        cleanup_old_backups('/tmp', 'iris_backup_', keep=3)
+
+        return jsonify({
+            'success': True,
+            'message': '虹膜数据同步完成',
+            'size': f'{file_size:.2f} MB',
+            'backup': backup_dir
+        })
+
+    except Exception as e:
+        print(f"[同步下载] 失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/sync/package', methods=['POST'])
+def sync_package():
+    """
+    打包虹膜数据供对方客户端下载
+    """
+    try:
+        print("[打包数据] 开始...")
+
+        timestamp = int(time.time())
+        zip_filename = f'iris_data_{timestamp}.zip'
+        zip_path = f'/tmp/{zip_filename}'
+
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # 打包 photo 目录
+            for root, dirs, files in os.walk('photo'):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, '.')
+                    zipf.write(file_path, arcname)
+
+            # 打包 feature 目录
+            for root, dirs, files in os.walk('feature'):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, '.')
+                    zipf.write(file_path, arcname)
+
+        file_size = os.path.getsize(zip_path)
+        print(f"[打包数据] 完成，大小: {file_size / 1024 / 1024:.2f} MB")
+
+        # 返回下载链接
+        download_url = f'http://{request.host}/api/sync/download-file/{zip_filename}'
+
+        return jsonify({
+            'success': True,
+            'url': download_url,
+            'size': file_size
+        })
+
+    except Exception as e:
+        print(f"[打包数据] 失败: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/sync/download-file/<filename>', methods=['GET'])
+def sync_download_file(filename):
+    """
+    下载打包好的虹膜数据文件
+    """
+    try:
+        file_path = f'/tmp/{filename}'
+        if not os.path.exists(file_path):
+            return jsonify({'success': False, 'error': '文件不存在'}), 404
+
+        return send_file(
+            file_path,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 辅助函数 ====================
+
+def perform_bidirectional_sync(peer_url):
+    """
+    执行双向同步逻辑
+    1. 推送本地数据到对方
+    2. 从对方拉取数据
+    """
+    try:
+        print(f"[双向同步] 目标: {peer_url}")
+
+        # 步骤1：推送本地数据到对方
+        print("[双向同步] 步骤1: 推送本地数据到对方...")
+        push_result = push_data_to_peer(peer_url)
+
+        if not push_result['success']:
+            return {
+                'success': False,
+                'error': f'推送数据失败: {push_result["error"]}'
+            }
+
+        # 步骤2：从对方拉取数据
+        print("[双向同步] 步骤2: 从对方拉取数据...")
+        pull_result = pull_data_from_peer(peer_url)
+
+        if not pull_result['success']:
+            return {
+                'success': False,
+                'error': f'拉取数据失败: {pull_result["error"]}'
+            }
+
+        return {
+            'success': True,
+            'message': '双向同步完成',
+            'details': {
+                'push': push_result,
+                'pull': pull_result
+            }
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def push_data_to_peer(peer_url):
+    """推送本地数据到对方客户端"""
+    try:
+        # 打包本地数据
+        zip_path = '/tmp/iris_data_push.zip'
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk('photo'):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, '.')
+                    zipf.write(file_path, arcname)
+
+            for root, dirs, files in os.walk('feature'):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, '.')
+                    zipf.write(file_path, arcname)
+
+        file_size = os.path.getsize(zip_path) / 1024 / 1024
+        print(f"[推送数据] 打包完成，大小: {file_size:.2f} MB")
+
+        # 上传到对方
+        with open(zip_path, 'rb') as f:
+            files = {'file': ('iris_data.zip', f, 'application/zip')}
+            response = requests.post(
+                f'{peer_url}/api/sync/download',
+                files=files,
+                timeout=300
+            )
+
+        os.remove(zip_path)
+
+        if response.status_code == 200:
+            result = response.json()
+            return result
+        else:
+            return {
+                'success': False,
+                'error': f'HTTP {response.status_code}'
+            }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def pull_data_from_peer(peer_url):
+    """从对方客户端拉取数据"""
+    try:
+        # 请求对方打包数据
+        response = requests.post(
+            f'{peer_url}/api/sync/package',
+            timeout=60
+        )
+
+        if response.status_code != 200:
+            return {
+                'success': False,
+                'error': f'对方响应异常: {response.status_code}'
+            }
+
+        result = response.json()
+        if not result.get('success'):
+            return result
+
+        zip_url = result.get('url')
+        print(f"[拉取数据] 下载链接: {zip_url}")
+
+        # 下载 ZIP
+        zip_response = requests.get(zip_url, stream=True, timeout=300)
+        zip_path = '/tmp/iris_data_pull.zip'
+
+        with open(zip_path, 'wb') as f:
+            for chunk in zip_response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        file_size = os.path.getsize(zip_path) / 1024 / 1024
+        print(f"[拉取数据] 下载完成，大小: {file_size:.2f} MB")
+
+        # 备份并解压
+        backup_dir = f'/tmp/iris_backup_{int(time.time())}'
+        os.makedirs(backup_dir, exist_ok=True)
+
+        if os.path.exists('photo'):
+            shutil.copytree('photo', os.path.join(backup_dir, 'photo'))
+        if os.path.exists('feature'):
+            shutil.copytree('feature', os.path.join(backup_dir, 'feature'))
+
+        with zipfile.ZipFile(zip_path, 'r') as zipf:
+            zipf.extractall('.')
+
+        os.remove(zip_path)
+
+        return {
+            'success': True,
+            'message': '拉取数据成功',
+            'size': f'{file_size:.2f} MB'
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def cleanup_old_backups(directory, prefix, keep=3):
+    """清理旧备份，保留最近 N 个"""
+    try:
+        backups = sorted(
+            [d for d in os.listdir(directory) if d.startswith(prefix)],
+            reverse=True
+        )
+        for old_backup in backups[keep:]:
+            backup_path = os.path.join(directory, old_backup)
+            shutil.rmtree(backup_path)
+            print(f"[清理备份] 删除: {backup_path}")
+    except Exception as e:
+        print(f"[清理备份] 失败: {e}")
 
 
 # ==================== 启动 ====================
