@@ -46,13 +46,13 @@ COPY util/ ./util/
 RUN mkdir -p /app/photo /app/feature
 
 # 暴露端口
-EXPOSE 5000
+EXPOSE 8084
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:5000/api/status')" || exit 1
+  CMD python -c "import requests; requests.get('http://localhost:8084/api/status')" || exit 1
 
 # 启动命令
 CMD ["python", "iris_service.py", \
      "--host", "0.0.0.0", \
-     "--port", "5000"]
+     "--port", "8084"]

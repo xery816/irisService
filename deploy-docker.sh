@@ -136,7 +136,7 @@ echo ""
 docker run -d \
   --name $CONTAINER_NAME \
   $DEVICE_FLAGS \
-  -p 5000:5000 \
+  -p 8084:8084 \
   -v $INSTALL_DIR/photo:/app/photo \
   -v $INSTALL_DIR/feature:/app/feature \
   --restart=unless-stopped \
@@ -158,8 +158,8 @@ if docker ps | grep -q $CONTAINER_NAME; then
     IP=$(hostname -I | awk '{print $1}' || echo "localhost")
 
     echo "服务地址:"
-    echo -e "  ${GREEN}状态:   http://$IP:5000/api/status${NC}"
-    echo -e "  ${GREEN}视频流: http://$IP:5000/api/video/stream${NC}"
+    echo -e "  ${GREEN}状态:   http://$IP:8084/api/status${NC}"
+    echo -e "  ${GREEN}视频流: http://$IP:8084/api/video/stream${NC}"
     echo ""
 
     echo "数据目录:"
@@ -177,7 +177,7 @@ if docker ps | grep -q $CONTAINER_NAME; then
     # 测试 API
     echo "测试 API..."
     sleep 2
-    if curl -s http://localhost:5000/api/status > /dev/null 2>&1; then
+    if curl -s http://localhost:8084/api/status > /dev/null 2>&1; then
         echo -e "${GREEN}✓ API 响应正常${NC}"
     else
         echo -e "${YELLOW}⚠ API 暂未响应，查看日志: docker logs $CONTAINER_NAME${NC}"

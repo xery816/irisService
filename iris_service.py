@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 虹膜识别 HTTP 服务1
-启动命令: python iris_service.py --host 0.0.0.0 --port 5000 --camera 0
+启动命令: python iris_service.py --host 0.0.0.0 --port 8084 --camera 0
 """
 
 from flask import Flask, Response, jsonify, request, send_file
@@ -570,8 +570,8 @@ def sync_bidirectional():
 
     请求参数：
     {
-        "clientA": "192.168.2.59:5000",
-        "clientB": "8.155.146.165:5000"
+        "clientA": "192.168.2.59:8084",
+        "clientB": "8.155.146.165:8084"
     }
     """
     try:
@@ -588,7 +588,7 @@ def sync_bidirectional():
         print(f"[双向同步] 开始同步: {client_a} <-> {client_b}")
 
         # 判断当前服务是哪个客户端
-        current_host = request.host  # 例如：192.168.2.59:5000
+        current_host = request.host  # 例如：192.168.2.59:8084
 
         if current_host == client_a:
             # 当前是客户端A
@@ -914,7 +914,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='虹膜识别服务')
     parser.add_argument('--host', default='0.0.0.0', help='监听地址 (默认: 0.0.0.0)')
-    parser.add_argument('--port', type=int, default=5000, help='监听端口 (默认: 5000)')
+    parser.add_argument('--port', type=int, default=8084, help='监听端口 (默认: 8084)')
     args = parser.parse_args()
 
     # 摄像头索引固定为 0

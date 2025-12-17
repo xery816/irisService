@@ -37,17 +37,17 @@ pip install -r requirements.txt
 python iris_service.py
 
 # 指定参数
-python iris_service.py --host 0.0.0.0 --port 5000 --camera 0
+python iris_service.py --host 0.0.0.0 --port 8084 --camera 0
 ```
 
 ### 3. 测试服务
 
 ```bash
 # 查看状态
-curl http://localhost:5000/api/status
+curl http://localhost:8084/api/status
 
 # 浏览器打开视频流
-http://localhost:5000/api/video/stream
+http://localhost:8084/api/video/stream
 ```
 
 ## API 接口
@@ -63,7 +63,7 @@ http://localhost:5000/api/video/stream
 ### 采集虹膜
 
 ```bash
-curl -X POST http://localhost:5000/api/register/capture \
+curl -X POST http://localhost:8084/api/register/capture \
   -H "Content-Type: application/json" \
   -d '{"user_id": "zhangsan", "eye": "L"}'
 ```
@@ -71,7 +71,7 @@ curl -X POST http://localhost:5000/api/register/capture \
 ### 完成注册
 
 ```bash
-curl -X POST http://localhost:5000/api/register/complete \
+curl -X POST http://localhost:8084/api/register/complete \
   -H "Content-Type: application/json" \
   -d '{"user_id": "zhangsan"}'
 ```
@@ -79,7 +79,7 @@ curl -X POST http://localhost:5000/api/register/complete \
 ### 虹膜识别
 
 ```bash
-curl -X POST http://localhost:5000/api/recognize
+curl -X POST http://localhost:8084/api/recognize
 ```
 
 ## 前端集成
@@ -87,13 +87,13 @@ curl -X POST http://localhost:5000/api/recognize
 ### 显示视频流
 
 ```html
-<img src="http://localhost:5000/api/video/stream" />
+<img src="http://localhost:8084/api/video/stream" />
 ```
 
 ### React 示例
 
 ```tsx
-const IRIS_URL = 'http://localhost:5000';
+const IRIS_URL = 'http://localhost:8084';
 
 // 视频流
 <img src={`${IRIS_URL}/api/video/stream`} />
@@ -138,7 +138,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/iris_service
-ExecStart=/opt/iris_service/iris_service --host 0.0.0.0 --port 5000 --camera 0
+ExecStart=/opt/iris_service/iris_service --host 0.0.0.0 --port 8084 --camera 0
 Restart=always
 
 [Install]
@@ -154,5 +154,5 @@ sudo systemctl start iris_service
 
 1. **摄像头索引**：通过 `ls /dev/video*` 查看可用摄像头
 2. **跨域访问**：已配置 CORS，允许所有来源
-3. **防火墙**：需开放服务端口（默认 5000）
+3. **防火墙**：需开放服务端口（默认 8084）
 
