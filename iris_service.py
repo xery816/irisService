@@ -14,9 +14,131 @@ import shutil
 import numpy as np
 import zipfile
 import requests
+import re
 
 app = Flask(__name__)
 CORS(app, origins="*")
+
+
+def score_ir_device(v4l2_output: str) -> int:
+    """
+    根据 v4l2-ctl --all 输出给设备打一个"红外相机可能性分数"
+
+    评分维度：
+    1. 名字/卡类型里包含 nir/ir/infrared/mono 等 (+3分/关键词)
+    2. 像素格式中出现经典灰度格式 Y8/GREY/Y16 等 (+2分/格式)
+    3. 是否有 mono 描述 (+2分)
+    4. 只有一个 Video Capture 节点并且是灰度 (+1分)
+
+    返回：
+        int: IR 得分，>=3 分认为是红外摄像头
+    """
+    text = v4l2_output.lower()
+    score = 0
+
+    # 1. 名字/卡类型里包含 nir/ir/infrared/mono 等
+    name_keywords = ['nir', 'infrared', 'ir camera', 'ir_cam', 'monochrome', 'mono']
+    for kw in name_keywords:
+        if kw in text:
+            score += 3
+            print(f"[IR评分] 发现关键词 '{kw}' +3分")
+
+    # 2. 像素格式中出现经典灰度格式
+    #   常见：Y8、GREY、Y16、Y10、Y12 等
+    gray_fmt_keywords = ['y8', 'grey', 'gray', 'y16', 'y10', 'y12']
+    if 'formats:' in text or 'pixel formats:' in text:
+        for kw in gray_fmt_keywords:
+            if re.search(r'\b' + kw + r'\b', text):
+                score += 2
+                print(f"[IR评分] 发现灰度格式 '{kw}' +2分")
+
+    # 3. 是否有 mono 描述
+    if 'mono' in text:
+        score += 2
+        print(f"[IR评分] 发现 'mono' 描述 +2分")
+
+    # 4. 如果只有一个 Video Capture 节点并且是灰度，也可加一点分
+    if 'video capture' in text and 'capture-mplane' not in text:
+        score += 1
+        print(f"[IR评分] 单一 Video Capture 节点 +1分")
+
+    print(f"[IR评分] 总分: {score}")
+    return score
+
+
+def find_infrared_camera():
+    """
+    自动检测并返回红外摄像头设备索引
+
+    返回：
+        int or None: 红外摄像头的索引，如果未找到返回 None
+    """
+    import glob
+    import subprocess
+
+    print("\n" + "=" * 60)
+    print("[自动检测] 开始扫描红外摄像头...")
+    print("=" * 60)
+
+    device_paths = {}
+    try:
+        video_devices = glob.glob('/dev/video*')
+        for device_path in video_devices:
+            device_name = device_path.split('/')[-1]
+            if device_name[5:].isdigit():
+                idx = int(device_name.replace('video', ''))
+                device_paths[idx] = device_path
+    except Exception as e:
+        print(f"[自动检测] 读取设备失败: {e}")
+        return None
+
+    print(f"[自动检测] 发现 {len(device_paths)} 个视频设备")
+
+    best_device = None
+    best_score = 0
+
+    for idx in sorted(device_paths.keys()):
+        device_path = device_paths[idx]
+        print(f"\n[自动检测] 检查 {device_path}...")
+
+        try:
+            # 先用 OpenCV 测试是否可以打开
+            cap = cv2.VideoCapture(idx)
+            if not cap.isOpened():
+                print(f"[自动检测] ✗ {device_path} 无法打开，跳过")
+                continue
+            cap.release()
+
+            # 获取 v4l2 信息并评分
+            result = subprocess.run(
+                ['v4l2-ctl', '--device', device_path, '--all'],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+
+            if result.returncode == 0:
+                ir_score = score_ir_device(result.stdout)
+
+                if ir_score > best_score:
+                    best_score = ir_score
+                    best_device = idx
+                    print(f"[自动检测] ✓ 当前最佳红外摄像头: {device_path} (得分: {ir_score})")
+            else:
+                print(f"[自动检测] ✗ v4l2-ctl 执行失败")
+
+        except Exception as e:
+            print(f"[自动检测] ✗ {device_path} 检查异常: {e}")
+
+    print("\n" + "=" * 60)
+    if best_device is not None and best_score >= 3:
+        print(f"[自动检测] 找到红外摄像头: /dev/video{best_device} (得分: {best_score})")
+        print("=" * 60 + "\n")
+        return best_device
+    else:
+        print(f"[自动检测] 未找到红外摄像头 (最高得分: {best_score}，需要 ≥3)")
+        print("=" * 60 + "\n")
+        return None
 
 
 class IrisService:
@@ -431,7 +553,9 @@ def list_cameras():
             }
 
             try:
-                # 先检查设备能力
+                # 先检查设备能力并计算 IR 评分
+                v4l2_output = ''
+                ir_score = 0
                 try:
                     import subprocess
                     result = subprocess.run(
@@ -442,14 +566,30 @@ def list_cameras():
                     )
 
                     if result.returncode == 0:
+                        v4l2_output = result.stdout
+                        debug_entry['raw_v4l2'] = v4l2_output  # 保留原始输出用于调试
+
                         # 提取设备能力
-                        for line in result.stdout.split('\n'):
+                        for line in v4l2_output.split('\n'):
                             if 'Device Caps' in line:
                                 debug_entry['device_caps'] = line.strip()
                             if 'Card type' in line:
                                 debug_entry['card_type'] = line.split(':', 1)[1].strip()
+
+                        # 计算 IR 评分
+                        print(f"\n[摄像头列表] 开始评估 {device_path} 的 IR 得分...")
+                        ir_score = score_ir_device(v4l2_output)
+                        debug_entry['ir_score'] = ir_score
+                        debug_entry['is_nir'] = ir_score >= 3  # 阈值：3分
+
+                        if ir_score >= 3:
+                            print(f"[摄像头列表] ✓ {device_path} 识别为红外摄像头 (得分: {ir_score})")
+                        else:
+                            print(f"[摄像头列表] ○ {device_path} 普通摄像头 (得分: {ir_score})")
+
                 except Exception as e:
                     debug_entry['v4l2_error'] = str(e)
+                    print(f"[摄像头列表] v4l2-ctl 执行失败: {e}")
 
                 # 尝试用 OpenCV 打开
                 cap = cv2.VideoCapture(idx)
@@ -464,12 +604,15 @@ def list_cameras():
                         'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
                         'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
                         'fps': cap.get(cv2.CAP_PROP_FPS),
-                        'name': debug_entry.get('card_type', f'Camera {idx}')
+                        'name': debug_entry.get('card_type', f'Camera {idx}'),
+                        'isNir': debug_entry.get('is_nir', False)  # 是否为红外摄像头
                     }
 
                     cameras.append(camera_info)
                     cap.release()
-                    print(f"[摄像头列表] ✓ {device_path} 可用: {camera_info['name']}")
+
+                    nir_tag = " [红外]" if camera_info['isNir'] else ""
+                    print(f"[摄像头列表] ✓ {device_path} 可用: {camera_info['name']}{nir_tag}")
                 else:
                     debug_entry['error'] = 'OpenCV failed to open (可能是元数据设备)'
                     print(f"[摄像头列表] ✗ {device_path} 无法打开 (可能是元数据设备)")
@@ -1082,22 +1225,45 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='虹膜识别服务')
     parser.add_argument('--host', default='0.0.0.0', help='监听地址 (默认: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8084, help='监听端口 (默认: 8084)')
+    parser.add_argument('--camera', type=int, help='手动指定摄像头索引（跳过自动检测）')
     args = parser.parse_args()
 
-    # 摄像头索引固定为 0
-    print("=" * 50)
+    # 自动检测红外摄像头
+    camera_index = 0  # 默认值
+    if args.camera is not None:
+        # 用户手动指定了摄像头索引
+        camera_index = args.camera
+        print("\n" + "=" * 60)
+        print(f"[手动指定] 使用摄像头索引: {camera_index}")
+        print("=" * 60 + "\n")
+    else:
+        # 自动检测红外摄像头
+        detected_index = find_infrared_camera()
+        if detected_index is not None:
+            camera_index = detected_index
+            print(f"[自动设置] 检测到红外摄像头已将摄像头索引设置为: {camera_index}")
+        else:
+            print(f"[默认设置] 未检测到红外摄像头，使用默认索引: {camera_index}")
+
+    # 设置到全局服务实例
+    iris_service.camera_index = camera_index
+
+    print("\n" + "=" * 60)
     print(f"虹膜识别服务启动")
     print(f"地址: http://{args.host}:{args.port}")
-    print(f"摄像头索引: 0 (未启动)")
+    print(f"摄像头索引: {camera_index} (未启动)")
     print("")
     print("API 端点:")
     print(f"  - 状态查询: http://{args.host}:{args.port}/api/status")
+    print(f"  - 摄像头列表: GET http://{args.host}:{args.port}/api/camera/list")
+    print(f"  - 设置摄像头: POST http://{args.host}:{args.port}/api/camera/set-device")
     print(f"  - 启动摄像头: POST http://{args.host}:{args.port}/api/camera/start")
     print(f"  - 停止摄像头: POST http://{args.host}:{args.port}/api/camera/stop")
     print(f"  - 视频流: http://{args.host}:{args.port}/api/video/stream")
     print("")
     print("提示: 摄像头需要手动启动后才能使用")
-    print("=" * 50)
+    print("提示: 可通过 /api/camera/set-device 重新设置摄像头")
+    print("=" * 60 + "\n")
 
     app.run(host=args.host, port=args.port, threaded=True)
 
