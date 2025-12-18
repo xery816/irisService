@@ -29,6 +29,11 @@ class IrisService:
         self.detection_result = {'detected': False}
         self.lock = threading.Lock()
 
+        # 后台持续识别相关
+        self.recognition_cache = []  # 识别结果缓存
+        self.is_recognizing = False  # 是否正在后台识别
+        self.recognition_lock = threading.Lock()
+
     def start_camera(self):
         """启动红外摄像头"""
         import time
@@ -246,6 +251,126 @@ class IrisService:
             return {'success': False, 'error': '未找到匹配'}
         except Exception as e:
             print(f"识别失败: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def start_background_recognition(self, duration=5.0):
+        """
+        启动后台持续识别任务
+        在指定时间内持续识别，缓存所有成功结果
+
+        参数:
+            duration: 持续识别的时间（秒）
+        """
+        if self.is_recognizing:
+            print("[后台识别] 已有识别任务在运行")
+            return {'success': False, 'error': '已有识别任务在运行'}
+
+        # 清空缓存
+        with self.recognition_lock:
+            self.recognition_cache = []
+            self.is_recognizing = True
+
+        def recognition_worker():
+            start_time = time.time()
+            attempt_count = 0
+            success_count = 0
+
+            print(f"[后台识别] 开始，持续 {duration} 秒")
+
+            while time.time() - start_time < duration:
+                if not self.is_running:
+                    print("[后台识别] 摄像头已停止")
+                    break
+
+                attempt_count += 1
+
+                # 检查是否检测到虹膜
+                if self.is_iris_detected:
+                    try:
+                        # 执行识别
+                        result = self._recognize_single_frame()
+
+                        if result['success']:
+                            success_count += 1
+                            confidence = result.get('confidence', 0)
+
+                            # 缓存结果
+                            with self.recognition_lock:
+                                self.recognition_cache.append({
+                                    'timestamp': time.time(),
+                                    'result': result,
+                                    'confidence': confidence
+                                })
+
+                            print(f"[后台识别] 第 {success_count} 次成功: "
+                                  f"{result['user_id']}, 置信度 {confidence:.1f}%")
+
+                            # 如果置信度很高，可以提前结束
+                            if confidence >= 95:
+                                print(f"[后台识别] 置信度达到 {confidence:.1f}%，提前结束")
+                                break
+
+                    except Exception as e:
+                        print(f"[后台识别] 识别异常: {e}")
+
+                time.sleep(0.15)  # 每150ms尝试一次，避免过于频繁
+
+            elapsed = time.time() - start_time
+            with self.recognition_lock:
+                self.is_recognizing = False
+
+            print(f"[后台识别] 结束，耗时 {elapsed:.1f}秒，"
+                  f"尝试 {attempt_count} 次，成功 {success_count} 次")
+
+        # 启动后台线程
+        threading.Thread(target=recognition_worker, daemon=True).start()
+        return {'success': True, 'message': f'后台识别已启动，持续 {duration} 秒'}
+
+    def get_best_recognition_result(self):
+        """
+        获取缓存中置信度最高的识别结果
+        """
+        with self.recognition_lock:
+            if not self.recognition_cache:
+                return {'success': False, 'error': '未检测到虹膜或识别失败'}
+
+            # 按置信度排序，取最高的
+            best = max(self.recognition_cache, key=lambda x: x['confidence'])
+
+            print(f"[获取结果] 从 {len(self.recognition_cache)} 个结果中选择最佳: "
+                  f"{best['result']['user_id']}, 置信度 {best['confidence']:.1f}%")
+
+            return best['result']
+
+    def _recognize_single_frame(self):
+        """
+        识别单帧（内部方法，不加锁）
+        """
+        if not self.is_iris_detected:
+            return {'success': False, 'error': '未检测到虹膜'}
+
+        with self.lock:
+            if self.current_frame is None:
+                return {'success': False, 'error': '无法获取图像'}
+            frame = self.current_frame.copy()
+
+        try:
+            from util.contrast import contrast
+            name, eye, scores = contrast(frame)
+
+            if name and scores:
+                best_score = scores[0][1]
+                confidence = max(0, 100 - (best_score / 1000))
+                return {
+                    'success': True,
+                    'user_id': name,
+                    'eye': eye,
+                    'confidence': round(confidence, 2),
+                    'score': best_score
+                }
+
+            return {'success': False, 'error': '未找到匹配'}
+        except Exception as e:
             return {'success': False, 'error': str(e)}
 
 
@@ -548,15 +673,57 @@ def recognize_iris():
         print("[虹膜识别] 自动启动摄像头...")
         iris_service.start_camera()
         time.sleep(0.5)  # 等待摄像头启动并采集第一帧
-    
+
     # 执行识别
     result = iris_service.recognize()
-    
+
     # 如果是临时启动的，识别后自动关闭
     if not camera_was_running:
         print("[虹膜识别] 自动关闭摄像头...")
         iris_service.stop_camera()
-    
+
+    return jsonify(result)
+
+
+@app.route('/api/detect/start-recognition', methods=['POST'])
+def start_recognition():
+    """
+    启动后台持续识别（用于酒精检测场景）
+    前端在用户点击"开始检测"时调用
+    """
+    data = request.json or {}
+    duration = data.get('duration', 5.0)  # 默认持续5秒
+
+    # 确保摄像头运行
+    if not iris_service.is_running:
+        print("[启动识别] 启动摄像头...")
+        iris_service.start_camera()
+        time.sleep(0.8)  # 等待摄像头初始化
+
+    # 启动后台识别
+    result = iris_service.start_background_recognition(duration)
+
+    return jsonify(result)
+
+
+@app.route('/api/detect/get-result', methods=['POST'])
+def get_recognition_result():
+    """
+    获取后台识别的最佳结果
+    前端在酒精检测完成后调用
+    """
+    # 等待后台识别完成（最多等待1秒）
+    timeout = 1.0
+    start_time = time.time()
+
+    while iris_service.is_recognizing:
+        if time.time() - start_time > timeout:
+            print("[获取结果] 后台识别仍在进行，直接返回当前最佳结果")
+            break
+        time.sleep(0.1)
+
+    result = iris_service.get_best_recognition_result()
+
     return jsonify(result)
 
 
