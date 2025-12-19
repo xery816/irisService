@@ -289,7 +289,7 @@ class IrisService:
         # 创建用户目录
         user_dir = os.path.join('photo', user_id, eye)
 
-        # 🆕 如果是该用户该眼别的第一张照片（idx=1），清空旧数据
+        # 如果是该用户该眼别的第一张照片（idx=1），清空旧数据
         if os.path.exists(user_dir):
             existing = [f for f in os.listdir(user_dir) if f.endswith('.jpeg')]
             if len(existing) == 0:
@@ -328,7 +328,7 @@ class IrisService:
     def generate_features(self, user_id=None):
         """生成特征数据集"""
         try:
-            # 🆕 如果指定了 user_id，先删除该用户的旧特征
+            # 如果指定了 user_id，先删除该用户的旧特征
             if user_id:
                 feature_user_dir = os.path.join('feature', user_id)
                 if os.path.exists(feature_user_dir):
