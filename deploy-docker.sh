@@ -115,27 +115,22 @@ else
 fi
 
 echo ""
-# 映射所有 /dev/video* 设备到容器
-DEVICE_FLAGS=""
-echo "正在映射所有摄像头设备..."
-for dev in /dev/video*; do
-    if [ -c "$dev" ]; then
-        DEVICE_FLAGS="$DEVICE_FLAGS --device=$dev:$dev"
-        echo -e "${GREEN}✓ 映射: $dev${NC}"
-    fi
-done
-
-if [ -z "$DEVICE_FLAGS" ]; then
-    echo -e "${YELLOW}⚠ 警告: 未找到任何可用的摄像头设备${NC}"
-    echo -e "${YELLOW}⚠ 容器将在没有摄像头的情况下启动${NC}"
-fi
-
-echo ""
 
 # 运行容器
 docker run -d \
   --name $CONTAINER_NAME \
-  $DEVICE_FLAGS \
+  --privileged \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/video1:/dev/video1 \
+  --device /dev/video2:/dev/video2 \
+  --device /dev/video3:/dev/video3 \
+  --device /dev/video4:/dev/video4 \
+  --device /dev/video5:/dev/video5 \
+  --device /dev/video6:/dev/video6 \
+  --device /dev/video7:/dev/video7 \
+  --device /dev/video8:/dev/video8 \
+  --device /dev/video9:/dev/video9 \
+  --device /dev/video10:/dev/video10 \
   -p 8084:8084 \
   -v $INSTALL_DIR/photo:/app/photo \
   -v $INSTALL_DIR/feature:/app/feature \
